@@ -1,8 +1,12 @@
-version: "3"
+networks:
+  hadoopnet:
 
 services:
   namenode:
+    container_name: namenode
     image: bde2020/hadoop-namenode:2.0.0-hadoop2.7.4-java8
+    networks:
+      - hadoopnet
     volumes:
       - namenode:/hadoop/dfs/name
     environment:
@@ -10,10 +14,13 @@ services:
     env_file:
       - ./hadoop-hive.env
     ports:
-      - "50070:50070"
-    
+      - "15070:50070"
+
   datanode:
+    container_name: datanode
     image: bde2020/hadoop-datanode:2.0.0-hadoop2.7.4-java8
+    networks:
+      - hadoopnet
     volumes:
       - datanode:/hadoop/dfs/data
     env_file:
@@ -21,61 +28,97 @@ services:
     environment:
       SERVICE_PRECONDITION: "namenode:50070"
     ports:
-      - "50075:50075"
+      - "15075:50075"
 
   resourcemanager:
+    container_name: resourcemanager
     image: bde2020/hadoop-resourcemanager:2.0.0-hadoop2.7.4-java8
+    networks:
+      - hadoopnet
     environment:
       SERVICE_PRECONDITION: "namenode:50070 datanode:50075"
     env_file:
       - ./hadoop-hive.env
+    ports:
+      - "18088:8088"
 
   hive-server:
+    container_name: hive-server
     image: bde2020/hive:2.3.2-postgresql-metastore
+    networks:
+      - hadoopnet
     env_file:
       - ./hadoop-hive.env
     environment:
       HIVE_CORE_CONF_javax_jdo_option_ConnectionURL: "jdbc:postgresql://hive-metastore/metastore"
-      SERVICE_PRECONDITION: "hive-metastore:9083"
+      SERVICE_PRECONDITION: "hive-metastore:9083 namenode:50070 datanode:50075"
     ports:
-      - "10000:10000"
+      - "11000:10000"
 
   hive-metastore:
+    container_name: hive-metastore
     image: bde2020/hive:2.3.2-postgresql-metastore
+    networks:
+      - hadoopnet
     env_file:
       - ./hadoop-hive.env
     command: /opt/hive/bin/hive --service metastore
     environment:
       SERVICE_PRECONDITION: "namenode:50070 datanode:50075 hive-metastore-postgresql:5432 resourcemanager:8088"
     ports:
-      - "9083:9083"
+      - "19083:9083"
 
   hive-metastore-postgresql:
+    container_name: hive-metastore-postgresql
     image: bde2020/hive-metastore-postgresql:2.3.0
+    networks:
+      - hadoopnet
     ports:
-      - "5432:5432"
+      - "15432:5432"
 
   huedb:
+    container_name: huedb
     image: postgres:12.1-alpine
+    networks:
+      - hadoopnet
     volumes:
-      - pg_data:/var/lib/postgresl/data/
+      - pg_data:/var/lib/postgresql/data/
     ports:
-      - "5432"
+      - "15433:5432"
     env_file:
       - ./hadoop-hive.env
     environment:
-        SERVICE_PRECONDITION: "namenode:50070 datanode:50075 hive-metastore-postgresql:5432 resourcemanager:8088 hive-metastore:9083"
-  
+      SERVICE_PRECONDITION: "namenode:50070 datanode:50075 hive-metastore-postgresql:5432 resourcemanager:8088 hive-metastore:9083"
+
   hue:
-    image: gethue/hue:4.6.0
+    container_name: hue
+    image: gethue/hue:4.11.0
+    command: sh -c "export WEBHDFS_URL=http://172.18.0.4:50070/webhdfs/v1 && export HDFS_URL=hdfs://172.18.0.4:8020 && /usr/share/hue/build/env/bin/hue runserver 0.0.0.0:8888"
+    networks:
+      - hadoopnet
     environment:
-        SERVICE_PRECONDITION: "namenode:50070 datanode:50075 hive-metastore-postgresql:5432 resourcemanager:8088 hive-metastore:9083 huedb:5000"
+      SERVICE_PRECONDITION: "namenode:50070 datanode:50075 hive-metastore-postgresql:5432 resourcemanager:8088 hive-metastore:9083 huedb:5432 hive-server:10000"
+      WEBHDFS_URL: "http://172.18.0.4:50070/webhdfs/v1"
+      HDFS_URL: "hdfs://172.18.0.4:8020"
+      NAMENODE_HOST: "172.18.0.4"
+      NAMENODE_PORT: "50070"
     ports:
-      - "8888:8888"
+      - "18888:8888"
+    extra_hosts:
+      - "namenode:172.18.0.4"
+      - "datanode:172.18.0.8"
+      - "hive-server:172.18.0.5"
+      - "hive-metastore:172.18.0.7"
+      - "huedb:172.18.0.3"
+      - "resourcemanager:172.18.0.2"
     volumes:
-      - ./hue-overrides.ini:/usr/share/hue/desktop/conf/hue-overrides.ini
-    links:
+      - ./hue-overrides.ini:/usr/share/hue/desktop/conf/hue-overrides.ini:ro
+      - ./hue-init.sh:/usr/local/bin/hue-init.sh:ro
+    depends_on:
       - huedb
+      - hive-server
+      - namenode
+      - datanode
 
 volumes:
   namenode:
